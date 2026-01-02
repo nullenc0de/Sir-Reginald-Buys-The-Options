@@ -2,21 +2,21 @@
 """
 ASYMMETRIC OPTIONS AGENT
 ========================
-Discovers second-order trading opportunities from scratch.
-All data and state managed through Alpaca API - no local storage.
+Autonomous trading agent for binary events and lottery ticket options.
+Designed to run inside Claude Code where Claude acts as the reasoning engine.
 
 Data: Alpaca (news, market data, options)
-State: Alpaca (positions, orders, account)
-Reasoning: Local Ollama or manual review
+State: Alpaca (positions, orders, account) + local catalyst file
+Reasoning: Claude Code (autonomous research, position analysis, trade execution)
 
 Flow:
-1. Check current positions/exposure via Alpaca
-2. Pull latest news
-3. LLM identifies second-order effects → ticker → direction
-4. Find cheap high-convexity options
-5. Execute if risk limits allow
+1. run(agent) or autonomous_run(agent) detects time of day
+2. Checks positions for exits needed (moonshots, targets hit)
+3. Identifies catalysts happening today/tomorrow
+4. Generates research tasks from 100x/Research frameworks
+5. Claude executes searches, analyzes, asks user to confirm trades
 
-TECHNICAL NOTES (from audit):
+TECHNICAL NOTES:
 - API uses v2 for contracts, v1beta1 for market data
 - Free tier uses IEX data (~2.5% of volume) - wide spreads possible
 - 0DTE options may have null Greeks (Black-Scholes singularity)
@@ -32,7 +32,6 @@ import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
-from abc import ABC, abstractmethod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -671,140 +670,10 @@ class RiskManager:
 
 
 # =============================================================================
-# LLM INTERFACE
+# CLAUDE CODE INTERFACE
 # =============================================================================
 
-class LLM(ABC):
-    @abstractmethod
-    def analyze(self, news: List[Dict]) -> List[Dict]:
-        """Returns list of opportunities"""
-        pass
-
-
-class OllamaLLM(LLM):
-    """Local Ollama"""
-
-    def __init__(self, model: str = "llama3.2", url: str = "http://localhost:11434", research: str = ""):
-        self.model = model
-        self.url = url
-        self.external_research = research  # Pre-loaded research from file or Gemini etc
-        self._check()
-
-    def _check(self):
-        try:
-            resp = requests.get(f"{self.url}/api/tags", timeout=5)
-            if resp.status_code != 200:
-                raise ConnectionError()
-            models = [m["name"] for m in resp.json().get("models", [])]
-            logger.info(f"Ollama ready. Models: {models}")
-        except:
-            raise ConnectionError(f"Ollama not running at {self.url}. Run: ollama serve")
-
-    def _query(self, prompt: str) -> str:
-        resp = requests.post(
-            f"{self.url}/api/generate",
-            json={"model": self.model, "prompt": prompt, "stream": False},
-            timeout=120
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "")
-
-    def analyze(self, news: List[Dict]) -> List[Dict]:
-        if not news and not self.external_research:
-            return []
-
-        # Format news
-        news_text = "\n".join([
-            f"{i}. [{', '.join(a.get('symbols', [])) or 'GENERAL'}] {a.get('headline', '')}"
-            for i, a in enumerate(news[:20], 1)
-        ]) if news else "No news available."
-
-        # Include external research if provided
-        research_section = ""
-        if self.external_research:
-            research_section = f"""
-MACRO RESEARCH (from external analysis):
-{self.external_research}
-"""
-
-        prompt = f"""You are a macro trader finding second-order effects.
-
-CONCEPT: Markets price PRIMARY events but miss SECOND-ORDER consequences.
-Example: COVID lockdowns (primary) → can't visit family → send flowers instead (second-order) → Long 1-800-Flowers = 300% gain
-{research_section}
-TODAY'S NEWS:
-{news_text}
-
-Find second-order opportunities. Output ONLY valid JSON lines:
-{{"primary_event": "what happened", "second_order_effect": "non-obvious consequence", "ticker": "SYMBOL", "direction": "call", "confidence": 0.75, "reasoning": "why", "days": 30}}
-
-Rules:
-- US stocks only (not ETFs except SPY/QQQ/IWM)
-- Confidence 0.6-1.0
-- Think contrarian - what is everyone MISSING?
-- 0-5 opportunities max. Quality over quantity.
-
-JSON only, no other text:"""
-
-        try:
-            response = self._query(prompt)
-            opportunities = []
-
-            for line in response.strip().split("\n"):
-                line = line.strip()
-                if line.startswith("{") or "{" in line:
-                    # Use safe JSON parser with repair fallback
-                    opp = safe_json_parse(line)
-                    if opp and isinstance(opp, dict):
-                        if opp.get("confidence", 0) >= 0.6:
-                            opp["ticker"] = opp.get("ticker", "").upper()
-                            opp["direction"] = opp.get("direction", "call").lower()
-                            opportunities.append(opp)
-
-            return opportunities
-        except Exception as e:
-            logger.error(f"Ollama failed: {e}")
-            return []
-
-
-class ManualLLM(LLM):
-    """Manual mode - you provide opportunities"""
-
-    def analyze(self, news: List[Dict]) -> List[Dict]:
-        print(f"\n{'='*70}")
-        print("NEWS FOR REVIEW")
-        print(f"{'='*70}")
-
-        for i, a in enumerate(news[:25], 1):
-            print(f"\n{i}. {a.get('headline', '')[:80]}")
-            syms = a.get('symbols', [])
-            if syms:
-                print(f"   Tickers: {', '.join(syms)}")
-
-        print(f"\n{'='*70}")
-        print("Enter opportunities (or press Enter to skip):")
-        print('Format: {"ticker": "XYZ", "direction": "call", "confidence": 0.8, "days": 30, "reasoning": "why"}')
-        print(f"{'='*70}")
-
-        opportunities = []
-        while True:
-            try:
-                line = input("> ").strip()
-                if not line:
-                    break
-                opp = json.loads(line)
-                opp["ticker"] = opp.get("ticker", "").upper()
-                opportunities.append(opp)
-                print(f"  Added: {opp['ticker']} {opp.get('direction', 'call')}")
-            except json.JSONDecodeError:
-                print("  Invalid JSON, try again")
-            except EOFError:
-                break
-
-        return opportunities
-
-
-class ClaudeCodeLLM(LLM):
+class ClaudeCodeLLM:
     """
     Claude Code mode - returns news as structured data for Claude to analyze.
     Used when running in a Claude Code session where Claude IS the reasoning engine.
@@ -988,7 +857,7 @@ class Agent:
         self,
         api_key: str,
         api_secret: str,
-        llm: LLM = None,
+        llm: ClaudeCodeLLM = None,
         max_portfolio_risk: float = 0.20,
         max_single_trade: float = 0.05,
         min_confidence: float = 0.65
@@ -996,7 +865,7 @@ class Agent:
         self.alpaca = Alpaca(api_key, api_secret)
         self.risk = RiskManager(self.alpaca, max_portfolio_risk, max_single_trade)
         self.finder = OptionFinder(self.alpaca)
-        self.llm = llm or ManualLLM()
+        self.llm = llm or ClaudeCodeLLM()
         self.min_confidence = min_confidence
 
     def scan(self) -> List[Dict]:
@@ -3851,57 +3720,11 @@ def help_me(agent: Agent = None):
 
 
 # =============================================================================
-# CLI
+# END OF AGENT
 # =============================================================================
-
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Asymmetric Options Agent")
-    parser.add_argument("--api-key", required=True)
-    parser.add_argument("--api-secret", required=True)
-    parser.add_argument("--execute", action="store_true", help="Execute trades")
-    parser.add_argument("--ollama", action="store_true", help="Use Ollama")
-    parser.add_argument("--model", default="llama3.2", help="Ollama model")
-    parser.add_argument("--research", type=str, help="Path to research file (for Ollama mode)")
-    parser.add_argument("--max-risk", type=float, default=0.20, help="Max portfolio risk %")
-    parser.add_argument("--max-trade", type=float, default=0.05, help="Max single trade %")
-    parser.add_argument("--min-confidence", type=float, default=0.65, help="Min confidence")
-
-    args = parser.parse_args()
-
-    # Load research if provided
-    research_text = ""
-    if args.research:
-        try:
-            with open(args.research, 'r') as f:
-                research_text = f.read()
-            logger.info(f"Loaded research from {args.research} ({len(research_text)} chars)")
-        except Exception as e:
-            logger.warning(f"Could not load research file: {e}")
-
-    # Setup LLM
-    if args.ollama:
-        try:
-            llm = OllamaLLM(model=args.model, research=research_text)
-        except ConnectionError as e:
-            logger.error(str(e))
-            logger.info("Falling back to manual mode")
-            llm = ManualLLM()
-    else:
-        llm = ManualLLM()
-
-    agent = Agent(
-        api_key=args.api_key,
-        api_secret=args.api_secret,
-        llm=llm,
-        max_portfolio_risk=args.max_risk,
-        max_single_trade=args.max_trade,
-        min_confidence=args.min_confidence
-    )
-
-    agent.run(execute=args.execute)
-
-
-if __name__ == "__main__":
-    main()
+#
+# Usage (in Claude Code):
+#     agent = create_agent(API_KEY, API_SECRET)
+#     run(agent)
+#
+# That's it. Claude handles the rest.
