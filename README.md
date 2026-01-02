@@ -511,7 +511,7 @@ Claude: [Detects it's 7:00 PM - runs evening research session]
 ## File Structure
 
 ```
-~/asymmetric_options_agent.py          # Main agent (~3500 lines)
+~/asymmetric_options_agent.py          # Main agent (~3700 lines)
 ~/asymmetric_options_agent_README.md   # This file
 ~/.asymmetric_catalysts.json           # Catalyst storage (auto-created)
 ```
@@ -521,21 +521,26 @@ Claude: [Detects it's 7:00 PM - runs evening research session]
 | Lines (approx) | Section |
 |----------------|---------|
 | 1-250 | Catalyst storage functions |
-| 270-600 | Alpaca API client |
-| 600-1100 | Agent class, LLM interfaces |
-| 1128-1277 | `get_100x_framework()` - Binary event framework |
-| 1280-1458 | `get_research_framework()` - Second-order effects framework |
-| 1460-1835 | Trade finding and execution functions |
-| 1838-2100 | Profit target and monitoring system |
-| 2100-2570 | Scaled exit strategy |
-| 2573-2722 | Moonshot check and profit taking |
-| 2729-3020 | `daily_briefing()` - Full daily report |
-| 3023-3100 | `quick_check()`, `end_of_day_review()` |
-| **3102-3398** | **AUTONOMOUS SYSTEM (NEW)** |
-| 3106-3191 | `check_actions_needed()` - Position action scanner |
-| 3194-3257 | `get_research_tasks()` - Framework-based research generator |
-| 3260-3398 | `autonomous_run()` - Main autonomous entry point |
-| 3401-3700 | `run()` - Time-aware display (uses frameworks) |
+| 269-575 | Alpaca API client |
+| 577-675 | RiskManager |
+| 676-750 | ClaudeCodeLLM (Claude Code interface) |
+| 751-850 | OptionFinder |
+| 851-995 | Agent class |
+| 997-1147 | `get_100x_framework()` - Binary event framework |
+| 1149-1327 | `get_research_framework()` - Second-order effects framework |
+| 1329-1640 | Trade finding and execution functions |
+| 1643-1925 | Lottery basket execution |
+| 1927-2185 | Profit target and monitoring system |
+| 2186-2440 | Scaled exit strategy |
+| 2442-2596 | Moonshot check and profit taking |
+| 2598-2890 | `daily_briefing()` - Full daily report |
+| 2892-2973 | `quick_check()`, `end_of_day_review()` |
+| **2975-3270** | **AUTONOMOUS SYSTEM** |
+| 2975-3061 | `check_actions_needed()` - Position action scanner |
+| 3063-3127 | `get_research_tasks()` - Framework-based research generator |
+| 3129-3272 | `autonomous_run()` - Main autonomous entry point |
+| 3274-3660 | `run()` - Time-aware display (uses frameworks) |
+| 3661-3720 | `help_me()` - Quick reference |
 
 ---
 
