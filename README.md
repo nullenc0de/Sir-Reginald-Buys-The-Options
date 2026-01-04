@@ -36,6 +36,7 @@ When you say "run the agent", Claude:
 │  3. GENERATE RESEARCH TASKS (if research mode)                  │
 │     → Pulls search queries from 100x Framework                  │
 │     → Pulls searches from Research Framework                    │
+│     → Fetches Polymarket prediction market signals              │
 │     → Includes seasonal factors                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │  4. CLAUDE EXECUTES                                             │
@@ -258,6 +259,59 @@ The research framework automatically detects what's seasonally relevant:
 | July - August | Back to School |
 | November - December | Holiday Shopping Season |
 
+### Polymarket Prediction Market Signals (NEW)
+
+The agent integrates with **Polymarket** to fetch crowd-sourced probability data for binary events. This helps quantify the odds on events we're trading.
+
+**No API key required** - uses the public Gamma API (read-only).
+
+| Function | What It Does |
+|----------|--------------|
+| `get_polymarket_signals()` | Fetches high-volume prediction markets, categorizes by probability |
+| `search_polymarket(query)` | Search for specific topics (e.g., "bitcoin", "fed rate") |
+| `get_polymarket_for_ticker(ticker)` | Find prediction markets relevant to a stock |
+
+**What it returns:**
+- **High probability events (>70%)**: Events likely to happen - trade WITH the crowd
+- **Uncertain events (40-60%)**: Coin flips - potential contrarian plays
+- **Tradeable markets**: Events filtered for stock market relevance (Fed, crypto, tariffs, etc.)
+
+**Example use cases:**
+```
+Claude, what do prediction markets say about Fed rate cuts?
+Check Polymarket for any Bitcoin-related events
+Get Polymarket data for COIN
+```
+
+**Keywords tracked:** Fed/FOMC, Bitcoin/crypto, tariffs, Tesla, Nvidia, mergers, oil, gold, silver, FDA
+
+### Automatic Position Enrichment
+
+When you run the agent, each position is automatically enriched with Polymarket context:
+
+```
+APLD260123C00035000
+  Catalyst: Earnings + CES (32% short)
+  P/L: 1.75x ($328)
+  📊 POLYMARKET: No prediction market found for this catalyst
+     (Searched: ['apld'])
+
+SLV260220C00070000
+  Catalyst: China silver export controls
+  📊 POLYMARKET: Will China restrict silver exports in 2026?
+     Probability: 35%
+     LEANING BEARISH - Market skeptical. Contrarian if you're bullish.
+```
+
+**Interpretation guide:**
+| Probability | Meaning |
+|-------------|---------|
+| >70% | CONSENSUS BULLISH - Options may be expensive (priced in) |
+| 55-70% | LEANING BULLISH - Slight market consensus |
+| 45-55% | COIN FLIP - True binary event, max uncertainty |
+| 30-45% | LEANING BEARISH - Contrarian if you're bullish |
+| <30% | CONSENSUS BEARISH - High risk contrarian play |
+
 ---
 
 ## Scaled Exit Strategy
@@ -340,6 +394,13 @@ List all stored catalysts
 | `get_scaled_exit_plan(agent)` | "Show scaled exit plan" |
 | `place_scaled_exit_orders(agent, tranche=1)` | "Sell tranche 1" |
 | `moonshot_check(agent)` | "Any moonshots?" |
+
+### Prediction Markets (Polymarket)
+| Function | What to Ask Claude |
+|----------|-------------------|
+| `get_polymarket_signals()` | "Show me Polymarket signals" |
+| `search_polymarket(query)` | "Search Polymarket for bitcoin events" |
+| `get_polymarket_for_ticker(ticker)` | "Get Polymarket data for COIN" |
 
 ### Catalyst Management
 | Function | What to Ask Claude |
