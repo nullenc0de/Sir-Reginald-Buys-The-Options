@@ -1146,6 +1146,417 @@ def get_100x_framework() -> Dict:
     }
 
 
+# =============================================================================
+# POLYMARKET PREDICTION MARKET SIGNALS
+# =============================================================================
+
+def get_polymarket_signals(
+    min_liquidity: float = 100000,
+    min_volume: float = 50000,
+    categories: Optional[List[str]] = None
+) -> Dict:
+    """
+    Fetch prediction market data from Polymarket for binary event probability.
+
+    Uses the public Gamma API (NO AUTH REQUIRED - read-only access).
+
+    This data helps quantify probability on binary events we're trading:
+    - Fed rate decisions
+    - Crypto regulation votes
+    - Political outcomes affecting markets
+    - Merger approvals
+    - Major policy changes
+
+    Args:
+        min_liquidity: Minimum market liquidity to filter (default $100k)
+        min_volume: Minimum trading volume to filter (default $50k)
+        categories: Optional list of categories to filter
+                   (e.g., ["politics", "crypto", "economics"])
+
+    Returns:
+        Dict with:
+            - high_probability_events: Events with >70% probability
+            - uncertain_events: Events with 40-60% probability (contrarian plays)
+            - tradeable_markets: Markets filtered for options relevance
+            - raw_data: Full API response for deeper analysis
+    """
+    GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+
+    # Keywords that indicate market-moving events
+    MARKET_RELEVANT_KEYWORDS = [
+        # Fed/monetary
+        "fed", "fomc", "rate", "powell", "interest rate", "inflation",
+        # Crypto/regulatory
+        "bitcoin", "crypto", "sec", "etf", "stablecoin", "regulation",
+        # Politics that move markets
+        "trump", "tariff", "china", "trade war", "election",
+        # Tech/business
+        "tesla", "nvidia", "apple", "google", "amazon", "microsoft",
+        # Mergers
+        "merger", "acquisition", "antitrust", "ftc",
+        # Commodities
+        "oil", "gold", "silver", "opec",
+        # Healthcare
+        "fda", "drug", "vaccine", "medicare"
+    ]
+
+    try:
+        # Fetch open events from Polymarket
+        response = requests.get(
+            f"{GAMMA_API_BASE}/events",
+            params={
+                "closed": "false",
+                "limit": 100,
+                "order": "volume",
+                "ascending": "false"
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return {
+                "error": f"API returned {response.status_code}",
+                "high_probability_events": [],
+                "uncertain_events": [],
+                "tradeable_markets": []
+            }
+
+        events = response.json()
+
+        high_prob = []
+        uncertain = []
+        tradeable = []
+
+        for event in events:
+            title = event.get("title", "").lower()
+            liquidity = float(event.get("liquidity", 0) or 0)
+            volume = float(event.get("volume", 0) or 0)
+
+            # Skip low liquidity/volume markets
+            if liquidity < min_liquidity or volume < min_volume:
+                continue
+
+            # Check if market-relevant
+            is_relevant = any(kw in title for kw in MARKET_RELEVANT_KEYWORDS)
+
+            # Parse markets within the event
+            markets = event.get("markets", [])
+            for market in markets:
+                question = market.get("question", "")
+
+                # Parse outcome prices (probability)
+                try:
+                    prices = json.loads(market.get("outcomePrices", "[]"))
+                    if len(prices) >= 2:
+                        # First price is typically "Yes" probability
+                        yes_prob = float(prices[0]) if prices[0] else 0
+                        no_prob = float(prices[1]) if prices[1] else 0
+                    else:
+                        yes_prob = 0.5
+                        no_prob = 0.5
+                except:
+                    yes_prob = 0.5
+                    no_prob = 0.5
+
+                market_data = {
+                    "event_title": event.get("title", "Unknown"),
+                    "question": question,
+                    "yes_probability": round(yes_prob * 100, 1),
+                    "no_probability": round(no_prob * 100, 1),
+                    "liquidity": liquidity,
+                    "volume": volume,
+                    "is_market_relevant": is_relevant,
+                    "end_date": market.get("endDate", "Unknown")
+                }
+
+                # Categorize by probability
+                if yes_prob >= 0.70 or no_prob >= 0.70:
+                    high_prob.append(market_data)
+                elif 0.40 <= yes_prob <= 0.60:
+                    uncertain.append(market_data)
+
+                # Add to tradeable if market-relevant
+                if is_relevant:
+                    tradeable.append(market_data)
+
+        # Sort by volume
+        high_prob.sort(key=lambda x: x["volume"], reverse=True)
+        uncertain.sort(key=lambda x: x["volume"], reverse=True)
+        tradeable.sort(key=lambda x: x["volume"], reverse=True)
+
+        return {
+            "high_probability_events": high_prob[:15],
+            "uncertain_events": uncertain[:15],
+            "tradeable_markets": tradeable[:20],
+            "total_events_scanned": len(events),
+            "timestamp": datetime.now().isoformat(),
+            "note": "Probabilities from prediction markets - crowd-sourced odds"
+        }
+
+    except requests.exceptions.Timeout:
+        return {
+            "error": "Polymarket API timeout",
+            "high_probability_events": [],
+            "uncertain_events": [],
+            "tradeable_markets": []
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "high_probability_events": [],
+            "uncertain_events": [],
+            "tradeable_markets": []
+        }
+
+
+def search_polymarket(query: str) -> List[Dict]:
+    """
+    Search Polymarket for specific events/markets.
+
+    Args:
+        query: Search term (e.g., "bitcoin", "fed rate", "trump")
+
+    Returns:
+        List of matching markets with probabilities
+    """
+    GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+
+    try:
+        # Search events endpoint
+        response = requests.get(
+            f"{GAMMA_API_BASE}/events",
+            params={
+                "closed": "false",
+                "limit": 50,
+                "title_like": query
+            },
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return []
+
+        events = response.json()
+        results = []
+
+        for event in events:
+            for market in event.get("markets", []):
+                try:
+                    prices = json.loads(market.get("outcomePrices", "[]"))
+                    yes_prob = float(prices[0]) * 100 if len(prices) > 0 and prices[0] else 50
+                except:
+                    yes_prob = 50
+
+                results.append({
+                    "event": event.get("title", "Unknown"),
+                    "question": market.get("question", ""),
+                    "yes_probability": round(yes_prob, 1),
+                    "liquidity": float(event.get("liquidity", 0) or 0),
+                    "volume": float(event.get("volume", 0) or 0),
+                    "end_date": market.get("endDate", "Unknown")
+                })
+
+        # Sort by volume
+        results.sort(key=lambda x: x["volume"], reverse=True)
+        return results[:20]
+
+    except Exception as e:
+        logger.error(f"Polymarket search error: {e}")
+        return []
+
+
+def get_polymarket_for_ticker(ticker: str) -> Dict:
+    """
+    Find Polymarket prediction markets relevant to a specific stock ticker.
+
+    Useful for finding probability data on:
+    - FDA approvals (biotech tickers)
+    - Merger completions
+    - Regulatory outcomes
+
+    Args:
+        ticker: Stock ticker (e.g., "TSLA", "NVDA", "BTC")
+
+    Returns:
+        Dict with relevant markets and probabilities
+    """
+    # Map tickers to search terms
+    TICKER_KEYWORDS = {
+        "TSLA": ["tesla", "elon musk"],
+        "NVDA": ["nvidia", "ai chip"],
+        "AAPL": ["apple", "iphone"],
+        "GOOGL": ["google", "alphabet"],
+        "GOOG": ["google", "alphabet"],
+        "AMZN": ["amazon"],
+        "MSFT": ["microsoft"],
+        "META": ["meta", "facebook", "zuckerberg"],
+        "BTC": ["bitcoin"],
+        "ETH": ["ethereum"],
+        "COIN": ["coinbase", "crypto"],
+        "MSTR": ["bitcoin", "microstrategy"],
+        # Crypto-related
+        "RIOT": ["bitcoin"],
+        "MARA": ["bitcoin"],
+        "CLSK": ["bitcoin"],
+    }
+
+    ticker_upper = ticker.upper()
+    search_terms = TICKER_KEYWORDS.get(ticker_upper, [ticker_upper.lower()])
+
+    all_results = []
+    for term in search_terms:
+        results = search_polymarket(term)
+        all_results.extend(results)
+
+    # Deduplicate by question
+    seen = set()
+    unique_results = []
+    for r in all_results:
+        q = r["question"]
+        if q not in seen:
+            seen.add(q)
+            unique_results.append(r)
+
+    return {
+        "ticker": ticker_upper,
+        "search_terms": search_terms,
+        "relevant_markets": unique_results[:10],
+        "note": "Prediction market probabilities for events affecting this ticker"
+    }
+
+
+def get_polymarket_context_for_catalyst(catalyst_desc: str, ticker: str = "") -> Optional[Dict]:
+    """
+    Find relevant Polymarket data for a position's catalyst.
+
+    This helps quantify whether our thesis is consensus or contrarian.
+
+    Args:
+        catalyst_desc: The catalyst description (e.g., "FDA Anaphylm Decision")
+        ticker: Optional ticker for additional context
+
+    Returns:
+        Dict with:
+            - search_term: What we searched for
+            - market_found: Whether we found a relevant market
+            - question: The prediction market question
+            - probability: Crowd-sourced probability (0-100)
+            - interpretation: What this means for the trade
+        Or None if no relevant market found
+    """
+    if not catalyst_desc or catalyst_desc == "Unknown":
+        return None
+
+    # Extract keywords from catalyst description
+    catalyst_lower = catalyst_desc.lower()
+
+    # Map catalyst types to search terms
+    search_terms = []
+
+    # FDA-related
+    if "fda" in catalyst_lower or "pdufa" in catalyst_lower:
+        search_terms.append("fda")
+        # Try to extract drug name or condition
+        words = catalyst_desc.split()
+        for word in words:
+            if word.upper() not in ["FDA", "PDUFA", "DECISION", "APPROVAL"]:
+                if len(word) > 3:
+                    search_terms.append(word.lower())
+
+    # Commodities
+    if "silver" in catalyst_lower:
+        search_terms.extend(["silver", "precious metals"])
+    if "gold" in catalyst_lower:
+        search_terms.extend(["gold", "precious metals"])
+    if "oil" in catalyst_lower or "energy" in catalyst_lower:
+        search_terms.extend(["oil", "energy"])
+    if "gas" in catalyst_lower or "natural gas" in catalyst_lower:
+        search_terms.extend(["natural gas", "energy"])
+
+    # Geopolitical
+    if "china" in catalyst_lower:
+        search_terms.extend(["china", "tariff"])
+    if "tariff" in catalyst_lower:
+        search_terms.append("tariff")
+    if "russia" in catalyst_lower or "ukraine" in catalyst_lower:
+        search_terms.extend(["russia", "ukraine"])
+
+    # Crypto
+    if "bitcoin" in catalyst_lower or "crypto" in catalyst_lower:
+        search_terms.extend(["bitcoin", "crypto"])
+    if "etf" in catalyst_lower:
+        search_terms.append("etf")
+
+    # Fed/rates
+    if "fed" in catalyst_lower or "fomc" in catalyst_lower or "rate" in catalyst_lower:
+        search_terms.extend(["fed", "interest rate"])
+
+    # Earnings/squeeze - less likely to have Polymarket data
+    if "earnings" in catalyst_lower or "squeeze" in catalyst_lower:
+        # Try ticker-based search
+        if ticker:
+            search_terms.append(ticker.lower()[:4])  # First 4 chars of ticker
+
+    # Weather - unlikely to have markets but try
+    if "polar" in catalyst_lower or "vortex" in catalyst_lower or "weather" in catalyst_lower:
+        search_terms.append("weather")
+
+    # Deduplicate
+    search_terms = list(set(search_terms))[:3]  # Max 3 searches to avoid slowdown
+
+    if not search_terms:
+        return None
+
+    # Search Polymarket for each term
+    best_result = None
+    best_volume = 0
+
+    for term in search_terms:
+        try:
+            results = search_polymarket(term)
+            for r in results:
+                # Skip markets too far out (>1 year)
+                if r.get("volume", 0) > best_volume:
+                    # Check if it's actually relevant (not just keyword match)
+                    question_lower = r.get("question", "").lower()
+                    if any(t in question_lower for t in search_terms):
+                        best_volume = r["volume"]
+                        best_result = r
+                        best_result["search_term"] = term
+        except:
+            continue
+
+    if not best_result:
+        return {
+            "search_terms": search_terms,
+            "market_found": False,
+            "interpretation": "No prediction market found for this catalyst"
+        }
+
+    # Interpret the probability
+    prob = best_result.get("yes_probability", 50)
+
+    if prob >= 70:
+        interpretation = f"CONSENSUS BULLISH ({prob}% yes) - Market expects this to happen. Options may be expensive."
+    elif prob >= 55:
+        interpretation = f"LEANING BULLISH ({prob}% yes) - Slight market consensus toward yes."
+    elif prob >= 45:
+        interpretation = f"COIN FLIP ({prob}% yes) - Market is uncertain. True binary event."
+    elif prob >= 30:
+        interpretation = f"LEANING BEARISH ({prob}% yes) - Market skeptical. Contrarian if you're bullish."
+    else:
+        interpretation = f"CONSENSUS BEARISH ({prob}% yes) - Market expects this to fail. High risk contrarian play."
+
+    return {
+        "search_term": best_result.get("search_term", ""),
+        "market_found": True,
+        "question": best_result.get("question", ""),
+        "probability": prob,
+        "volume": best_result.get("volume", 0),
+        "interpretation": interpretation
+    }
+
+
 def get_research_framework() -> Dict:
     """
     Get the dynamic research framework.
@@ -2976,6 +3387,9 @@ def check_actions_needed(agent: Agent) -> Dict:
     """
     Check all positions and return required actions.
 
+    Each position is enriched with Polymarket prediction market data
+    to show if the thesis is consensus or contrarian.
+
     Returns:
         Dict with:
             - moonshots: Positions at 3x+ (URGENT SELL)
@@ -2983,6 +3397,9 @@ def check_actions_needed(agent: Agent) -> Dict:
             - warming: Positions at 1.5x+ (Watch closely)
             - catalysts_today: Positions with catalyst today
             - catalysts_tomorrow: Positions with catalyst tomorrow
+
+        Each position includes:
+            - prediction_market: Polymarket context with probability & interpretation
     """
     positions = agent.alpaca.get_positions()
     catalysts = load_catalysts()
@@ -3030,6 +3447,17 @@ def check_actions_needed(agent: Agent) -> Dict:
             "sell_qty_t1": max(1, int(qty * 0.5)),  # 50% for tranche 1
             "sell_price": current
         }
+
+        # Get Polymarket prediction market context for this catalyst
+        # This tells us if our thesis is consensus or contrarian
+        try:
+            # Extract base ticker from option symbol (e.g., APLD260123C00035000 -> APLD)
+            base_ticker = ''.join(c for c in symbol[:6] if c.isalpha())
+            pm_context = get_polymarket_context_for_catalyst(cat_desc, base_ticker)
+            if pm_context:
+                pos_data["prediction_market"] = pm_context
+        except Exception:
+            pass  # Don't let Polymarket errors break position checking
 
         result["all_positions"].append(pos_data)
 
@@ -3134,14 +3562,16 @@ def autonomous_run(agent: Agent) -> Dict:
     1. Checks current time and determines mode
     2. Checks all positions for required actions
     3. Generates research tasks if appropriate
-    4. Returns structured data for Claude to act on
+    4. Fetches Polymarket prediction market signals
+    5. Returns structured data for Claude to act on
 
     Returns:
         Dict with:
             - mode: Current operating mode
             - time_info: Current time details
             - actions: Required position actions (exits, sells)
-            - research: Research tasks to perform
+            - research_tasks: Research tasks to perform
+            - polymarket_signals: Prediction market probabilities for binary events
             - portfolio: Current portfolio status
             - recommendations: What Claude should do next
     """
@@ -3193,8 +3623,14 @@ def autonomous_run(agent: Agent) -> Dict:
     # Determine if research mode
     research_modes = ["weekend", "premarket", "midday", "after_hours"]
     research_tasks = []
+    polymarket_signals = {}
     if mode in research_modes and can_add_positions:
         research_tasks = get_research_tasks(agent)
+        # Fetch prediction market signals for binary event probability
+        try:
+            polymarket_signals = get_polymarket_signals(min_liquidity=50000, min_volume=25000)
+        except Exception as e:
+            polymarket_signals = {"error": str(e)}
 
     # Build recommendations
     recommendations = []
@@ -3245,6 +3681,16 @@ def autonomous_run(agent: Agent) -> Dict:
             "details": {"tasks": research_tasks[:5], "available_capital": available_capital}
         })
 
+    # Polymarket signals recommendation
+    if polymarket_signals and polymarket_signals.get("tradeable_markets"):
+        tradeable = polymarket_signals["tradeable_markets"]
+        recommendations.append({
+            "priority": "LOW",
+            "action": "REVIEW_PREDICTION_MARKETS",
+            "description": f"📊 POLYMARKET: {len(tradeable)} market-moving events with crowd-sourced probabilities",
+            "details": {"top_markets": tradeable[:3]}
+        })
+
     return {
         "mode": mode,
         "time_info": {
@@ -3263,6 +3709,7 @@ def autonomous_run(agent: Agent) -> Dict:
         },
         "actions": actions,
         "research_tasks": research_tasks if can_add_positions else [],
+        "polymarket_signals": polymarket_signals,
         "recommendations": recommendations
     }
 
